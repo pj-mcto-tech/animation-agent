@@ -1,0 +1,24 @@
+{
+    "pipeline": {
+        "input_dir": "data/input",
+        "processed_dir": "data/processed",
+        "output_dir": "data/output",
+        "shared_storage": "/mnt/shared_storage"
+    },
+    "llm": {
+        "model": "local-llm",
+        "temperature": 0.7,
+        "max_tokens": 1000
+    },
+    "audio": {
+        "engine": "default-audio-engine",
+        "format": "wav",
+        "sample_rate": 44100,
+        "bitrate": "128k"
+    },
+    "storage": {
+        "type": "local",
+        "mount_point": "/mnt/shared_storage",
+        "sync_enabled": true
+    }
+}
