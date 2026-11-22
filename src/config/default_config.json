@@ -1,6 +1,8 @@
 {
     "pipeline": {
         "project_name": "animation-agent",
+        "target_platform": "anicraft",
+        "anicraft_cli_path": "/home/pj-mcnerney/ai/anicraft/target/debug/anicraft-cli",
         "input_dir": "data/input",
         "processed_dir": "data/processed",
         "output_dir": "data/output",

@@ -1,4 +1,4 @@
-"""Stage 4: build the Cartoon Animator-compatible asset package."""
+"""Asset packaging stage: supports AniCraft, ArtCraft, and legacy Cartoon Animator targets."""
 
 from __future__ import annotations
 
@@ -12,22 +12,156 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-PACKAGE_NAME = "cartoon_animator_package.zip"
+PACKAGE_NAME = "animation_package.zip"
 TIMELINE_NAME = "timeline.json"
 MANIFEST_NAME = "manifest.json"
+ANICRAFT_DOC_NAME = "project.anicraft"
 
 
 class AssetPackager:
-    """Assembles timeline JSON + audio assets + manifest into a distributable ZIP.
+    """Assembles timeline JSON + audio assets + video assets + manifests into a distributable ZIP.
 
-    An optional `shared_storage_dir` mirrors the package to the Windows-mapped
-    directory consumed by Cartoon Animator.
+    Supports AniCraft (.anicraft document generation), ArtCraft asset sets, and legacy formats.
+    An optional `shared_storage_dir` mirrors the package to a network/shared directory.
     """
 
-    def __init__(self, output_dir: str, shared_storage_dir: Optional[str] = None):
+    def __init__(
+        self,
+        output_dir: str,
+        shared_storage_dir: Optional[str] = None,
+        target_platform: str = "anicraft",
+        anicraft_cli_path: Optional[str] = None,
+    ):
         self.output_dir = output_dir
         self.shared_storage_dir = shared_storage_dir or None
+        self.target_platform = target_platform
+        self.anicraft_cli_path = anicraft_cli_path or "/home/pj-mcnerney/ai/anicraft/target/debug/anicraft-cli"
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def generate_anicraft_document(
+        self,
+        timeline_data: Dict[str, Any],
+        output_path: str,
+        fps: float = 24.0,
+        width: int = 832,
+        height: int = 480,
+    ) -> str:
+        """Create a native .anicraft project file matching the timeline shots and layers."""
+        shots = timeline_data.get("shots", [])
+        total_duration = float(
+            timeline_data.get("total_duration")
+            or timeline_data.get("timeline_metadata", {}).get("total_duration")
+            or 10.0
+        )
+        total_frames = max(1, int(total_duration * fps))
+
+        layers = []
+        layer_id = 1
+
+        # Layer 1: Shots / Scene blocking
+        shot_keyframes = []
+        current_frame = 0
+        for idx, shot in enumerate(shots):
+            dur_sec = float(shot.get("duration", 2.0))
+            shot_dur_frames = max(1, int(dur_sec * fps))
+            shot_keyframes.append({
+                "start": current_frame,
+                "duration": shot_dur_frames,
+                "elements": [],
+                "tween": None,
+                "label": f"Shot {idx + 1}: {shot.get('id', idx + 1)}"
+            })
+            current_frame += shot_dur_frames
+
+        if not shot_keyframes:
+            shot_keyframes.append({
+                "start": 0,
+                "duration": total_frames,
+                "elements": [],
+                "tween": None,
+                "label": "Master"
+            })
+
+        layers.append({
+            "id": layer_id,
+            "name": "Shots",
+            "kind": "Normal",
+            "visible": True,
+            "locked": False,
+            "outline": False,
+            "color": {"r": 0.31, "g": 0.64, "b": 1.0, "a": 1.0},
+            "keyframes": shot_keyframes,
+        })
+        layer_id += 1
+
+        # Layer 2: Audio & Dialogue markers
+        audio_keyframes = []
+        current_frame = 0
+        for idx, shot in enumerate(shots):
+            dur_sec = float(shot.get("duration", 2.0))
+            shot_dur_frames = max(1, int(dur_sec * fps))
+            dialogue = shot.get("dialogue") or shot.get("script") or ""
+            audio_keyframes.append({
+                "start": current_frame,
+                "duration": shot_dur_frames,
+                "elements": [],
+                "tween": None,
+                "label": dialogue[:30] if dialogue else "Audio"
+            })
+            current_frame += shot_dur_frames
+
+        if not audio_keyframes:
+            audio_keyframes.append({
+                "start": 0,
+                "duration": total_frames,
+                "elements": [],
+                "tween": None,
+                "label": "Audio"
+            })
+
+        layers.append({
+            "id": layer_id,
+            "name": "Dialogue & Audio",
+            "kind": "Normal",
+            "visible": True,
+            "locked": True,
+            "outline": False,
+            "color": {"r": 0.95, "g": 0.55, "b": 0.20, "a": 1.0},
+            "keyframes": audio_keyframes,
+        })
+        layer_id += 1
+
+        doc = {
+            "format": "anicraft",
+            "version": 3,
+            "generator": "AniCraft Pipeline Agent",
+            "paths": [],
+            "document": {
+                "stage": {
+                    "width": width,
+                    "height": height,
+                    "fps": fps,
+                    "background": {"r": 0.1, "g": 0.1, "b": 0.12, "a": 1.0},
+                },
+                "scenes": [
+                    {
+                        "name": timeline_data.get("timeline_metadata", {}).get("project", "Scene 1"),
+                        "timeline": {
+                            "layers": layers
+                        }
+                    }
+                ],
+                "library": [],
+                "next_id": layer_id + 1
+            }
+        }
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(doc, handle, indent=2)
+
+        logger.info("Generated native AniCraft project document at %s", output_path)
+        return output_path
 
     def build_package(
         self,
@@ -75,16 +209,31 @@ class AssetPackager:
             shutil.copy2(master_animation_path, target)
             staged_master.append(os.path.basename(master_animation_path))
 
+        # Generate AniCraft document for AniCraft/ArtCraft targets
+        anicraft_doc_rel = None
+        if self.target_platform in ("anicraft", "artcraft"):
+            anicraft_file_path = os.path.join(staging_dir, ANICRAFT_DOC_NAME)
+            self.generate_anicraft_document(
+                timeline_data=timeline_data,
+                output_path=anicraft_file_path,
+                fps=float(timeline_data.get("fps", 24.0)),
+            )
+            anicraft_doc_rel = ANICRAFT_DOC_NAME
+
+        staged_extra = [anicraft_doc_rel] if anicraft_doc_rel else []
+
         manifest = {
-            "package_format": "cartoon-animator-v1",
+            "package_format": f"{self.target_platform}-v1",
+            "target_platform": self.target_platform,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "timeline_file": TIMELINE_NAME,
+            "anicraft_file": anicraft_doc_rel,
             "shot_count": len(timeline_data.get("shots", [])),
             "total_duration": timeline_data.get("total_duration")
             or timeline_data.get("timeline_metadata", {}).get("total_duration"),
             "audio_backend": (audio_manifest or {}).get("backend"),
             "video_backend": (video_manifest or {}).get("backend"),
-            "files": [TIMELINE_NAME, MANIFEST_NAME, *staged_master, *staged_audio, *staged_video],
+            "files": [TIMELINE_NAME, MANIFEST_NAME, *staged_extra, *staged_master, *staged_audio, *staged_video],
         }
         manifest_path = os.path.join(staging_dir, MANIFEST_NAME)
         with open(manifest_path, "w", encoding="utf-8") as handle:
@@ -97,13 +246,14 @@ class AssetPackager:
                 archive.write(os.path.join(staging_dir, entry), arcname=entry)
 
         logger.info(
-            "Asset package built: %s (%d files, %d shots)",
+            "Asset package built (%s target): %s (%d files, %d shots)",
+            self.target_platform,
             zip_path,
             len(archive_entries),
             manifest["shot_count"],
         )
         self._sync_shared_storage(zip_path, staging_dir, archive_entries)
-        return {"package_path": zip_path, "manifest": manifest}
+        return {"package_path": zip_path, "manifest": manifest, "anicraft_path": os.path.join(staging_dir, ANICRAFT_DOC_NAME) if anicraft_doc_rel else None}
 
     @staticmethod
     def _iter_audio_files(

@@ -27,7 +27,7 @@ class TestAssetPackager(unittest.TestCase):
             with open(audio_path, "wb") as fh:
                 fh.write(b"RIFFfake-wav")
 
-            packager = AssetPackager(output_dir=out_dir)
+            packager = AssetPackager(output_dir=out_dir, target_platform="cartoon-animator")
             result = packager.build_package(
                 timeline_data=TIMELINE_DATA,
                 audio_manifest={
@@ -76,3 +76,24 @@ class TestAssetPackager(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_anicraft_target_packaging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = os.path.join(tmp, "out")
+            packager = AssetPackager(output_dir=out_dir, target_platform="anicraft")
+            result = packager.build_package(
+                timeline_data=TIMELINE_DATA,
+                audio_manifest={"backend": "kokoro", "shots": [], "music": {}, "sfx": []},
+            )
+            zip_path = result["package_path"]
+            self.assertTrue(os.path.isfile(zip_path))
+            with zipfile.ZipFile(zip_path) as archive:
+                names = archive.namelist()
+                self.assertIn("timeline.json", names)
+                self.assertIn("manifest.json", names)
+                self.assertIn("project.anicraft", names)
+                doc = json.loads(archive.read("project.anicraft"))
+                self.assertEqual(doc["format"], "anicraft")
+                self.assertEqual(len(doc["document"]["scenes"][0]["timeline"]["layers"]), 2)
+                manifest = json.loads(archive.read("manifest.json"))
+                self.assertEqual(manifest["target_platform"], "anicraft")

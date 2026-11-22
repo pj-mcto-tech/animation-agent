@@ -81,6 +81,8 @@ class AnimationPipeline:
         processed_dir = storage.get("processed", "./data/processed")
         config: Dict[str, Any] = {
             "project_name": pipeline.get("project_name", "animation-agent"),
+            "target_platform": os.getenv("TARGET_PLATFORM", pipeline.get("target_platform", "anicraft")),
+            "anicraft_cli_path": os.getenv("ANICRAFT_CLI_PATH", pipeline.get("anicraft_cli_path", "/home/pj-mcnerney/ai/anicraft/target/debug/anicraft-cli")),
             "llm_endpoint": os.getenv(
                 "LLM_ENDPOINT", llm.get("endpoint", "http://localhost:8000/v1")
             ),
@@ -374,6 +376,8 @@ class AnimationPipeline:
         packager = AssetPackager(
             output_dir=self.config["output_dir"],
             shared_storage_dir=self.config.get("shared_storage_dir"),
+            target_platform=self.config.get("target_platform", "anicraft"),
+            anicraft_cli_path=self.config.get("anicraft_cli_path"),
         )
         package_info = packager.build_package(
             timeline_data=timeline_data,

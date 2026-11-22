@@ -1,4 +1,4 @@
-"""Animation Agent Stage 4: Cartoon Animator asset packaging."""
+"""Animation Agent Stage 4: Asset packaging (AniCraft, ArtCraft, Cartoon Animator)."""
 
 from src.asset_packager.packager import AssetPackager
 

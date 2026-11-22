@@ -93,8 +93,78 @@ class TimelineGenerator:
             return timeline
             
         except Exception as e:
-            logger.error(f"Error generating timeline: {str(e)}")
-            raise
+            logger.warning(f"LLM timeline generation failed or offline ({e}). Using deterministic script parser fallback.")
+            return self._fallback_parse_script(script)
+
+    def _fallback_parse_script(self, script: str) -> AnimationTimeline:
+        """Deterministic rule-based parser when LLM inference node is offline."""
+        lines = [line.strip() for line in script.strip().splitlines() if line.strip()]
+        entries = []
+        current_shot = {}
+        total_time = 0.0
+
+        for line in lines:
+            line_lower = line.lower()
+            if line_lower.startswith("shot") or line_lower.startswith("scene:"):
+                if current_shot.get("description"):
+                    entries.append(self._create_entry(current_shot, total_time))
+                    total_time += current_shot.get("duration", 2.0)
+                    current_shot = {}
+                current_shot["description"] = line
+            elif line_lower.startswith("visual:"):
+                current_shot["visual_prompt"] = line.split(":", 1)[1].strip()
+                if "description" not in current_shot:
+                    current_shot["description"] = current_shot["visual_prompt"]
+            elif line_lower.startswith("dialogue:"):
+                current_shot["dialogue"] = line.split(":", 1)[1].strip().strip('"')
+            elif line_lower.startswith("duration:"):
+                try:
+                    dur_str = line.split(":", 1)[1].replace("seconds", "").replace("s", "").strip()
+                    current_shot["duration"] = float(dur_str)
+                except ValueError:
+                    current_shot["duration"] = 2.0
+
+        if current_shot.get("description") or current_shot.get("visual_prompt"):
+            entries.append(self._create_entry(current_shot, total_time))
+            total_time += current_shot.get("duration", 2.0)
+
+        if not entries:
+            # Fallback for plain text
+            entries.append(
+                TimelineEntry(
+                    timestamp="00:00:00",
+                    description=script[:50],
+                    duration=3.0,
+                    type="character",
+                    visual_prompt=script,
+                    dialogue=script,
+                    audio_required=True,
+                    camera_movement="static",
+                )
+            )
+            total_time = 3.0
+
+        return AnimationTimeline(entries=entries, total_duration=round(total_time, 2))
+
+    @staticmethod
+    def _create_entry(shot_data: Dict[str, Any], current_time: float) -> TimelineEntry:
+        mins = int(current_time // 60)
+        secs = int(current_time % 60)
+        timestamp = f"00:{mins:02d}:{secs:02d}"
+        dur = shot_data.get("duration", 2.5)
+        desc = shot_data.get("description", "Animation shot")
+        vis = shot_data.get("visual_prompt") or desc
+        dia = shot_data.get("dialogue")
+        return TimelineEntry(
+            timestamp=timestamp,
+            description=desc,
+            duration=dur,
+            type="character",
+            visual_prompt=vis,
+            dialogue=dia,
+            audio_required=bool(dia),
+            camera_movement="static",
+        )
     
     def _build_prompt(self, script: str, context: Dict[str, Any]) -> str:
         """
