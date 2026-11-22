@@ -1,0 +1,10 @@
+Title: The Little Robot Who Learned to Paint
+Author: Animation Agent Sample
+Version: 1.0
+
+In a sunlit workshop, a small blue robot named Bit picks up a paintbrush for the first time.
+Bit dips the brush into a bucket of bright red paint and strokes it carefully across a blank canvas.
+The robot steps back, tilts its head, and watches the wet paint glisten in the afternoon light.
+Sparks of inspiration flicker across Bit's eyes as it reaches for a second color.
+Bit paints a wide golden horizon, then a row of crooked green trees along the edge.
+Finally, Bit signs the canvas with a cheerful beep and holds the finished painting toward the camera.

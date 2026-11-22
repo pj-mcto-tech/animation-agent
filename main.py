@@ -3,34 +3,41 @@
 Main entry point for the Animation Agent Pipeline.
 """
 
-import sys
+import logging
 import os
+import sys
+
 from src.core.pipeline import AnimationPipeline
 
-def main():
-    """Main function to run the animation pipeline."""
-    print("Starting Animation Agent Pipeline...")
-    
-    # Create pipeline instance
+
+def main() -> int:
+    """Run the animation pipeline end to end and report results."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logger = logging.getLogger("animation_agent.main")
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    sample_script = os.path.join(project_root, "data", "input", "sample_script.txt")
+
+    logger.info("Starting Animation Agent Pipeline...")
     pipeline = AnimationPipeline()
-    
-    # For demo purposes, we'll use a sample script file
-    sample_script = "data/input/sample_script.txt"
-    
-    # Run the pipeline
-    result = pipeline.run_pipeline(sample_script)
-    
-    # Display results
-    print("\nPipeline Execution Results:")
-    print(f"Status: {result['status']}")
-    print(f"Current Stage: {result['stage']}")
-    
-    if result['status'] == 'success':
-        print(f"Timeline generated with {result['timeline']['timeline_metadata']['total_shots']} shots")
-        print(f"Audio files generated: {result['audio']['metadata']['total_audio_files']}")
-        print(f"Package created: {result['package']['package_path']}")
-    else:
-        print(f"Error: {result.get('error', 'Unknown error')}")
+
+    try:
+        result = pipeline.run_pipeline(sample_script)
+    except Exception as exc:  # noqa: BLE001 - top-level CLI boundary
+        logger.error("Pipeline failed during stage '%s': %s", pipeline.current_stage, exc)
+        return 1
+
+    timeline = result["timeline"]
+    package = result["package"]
+    logger.info("Pipeline completed successfully.")
+    logger.info("Shots generated: %d", timeline["timeline_metadata"]["total_shots"])
+    logger.info("Total duration: %.2fs", timeline["timeline_metadata"]["total_duration"])
+    logger.info("Cartoon Animator package: %s", package["package_path"])
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

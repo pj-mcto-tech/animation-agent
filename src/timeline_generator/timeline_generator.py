@@ -28,14 +28,16 @@ class AnimationTimeline(BaseModel):
 class TimelineGenerator:
     """Generates animation timelines from text descriptions using LLMs"""
     
-    def __init__(self, api_base_url: str = "http://localhost:8000/v1"):
+    def __init__(self, api_base_url: str = "http://localhost:8000/v1", model: str = "qwen"):
         """
         Initialize the timeline generator
         
         Args:
             api_base_url: Base URL for the LLM API endpoint
+            model: Model name served by the OpenAI-compatible endpoint
         """
         self.api_base_url = api_base_url
+        self.model = model
         self.client = OpenAI(
             base_url=api_base_url,
             api_key="dummy-key"  # We'll use dummy key since we're using vLLM
@@ -60,7 +62,7 @@ class TimelineGenerator:
             
             # Call the LLM API
             response = self.client.chat.completions.create(
-                model="qwen",
+                model=self.model,
                 messages=[
                     {
                         "role": "system",

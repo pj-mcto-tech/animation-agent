@@ -15,9 +15,13 @@ def run_tests():
     project_root = os.path.dirname(os.path.abspath(__file__))
     os.chdir(project_root)
     
+    # Prefer the project virtualenv interpreter if it exists.
+    venv_python = os.path.join(project_root, "venv", "bin", "python")
+    python_executable = venv_python if os.path.exists(venv_python) else sys.executable
+    
     try:
         # Run tests with verbose output
-        result = subprocess.run([sys.executable, "-m", "pytest", "tests/", "-v"], 
+        result = subprocess.run([python_executable, "-m", "pytest", "tests/", "-v"], 
                               capture_output=True, text=True, check=False)
         
         print("Test Output:")

@@ -1,23 +1,28 @@
 {
     "pipeline": {
+        "project_name": "animation-agent",
         "input_dir": "data/input",
         "processed_dir": "data/processed",
         "output_dir": "data/output",
         "shared_storage": "/mnt/shared_storage"
     },
     "llm": {
-        "model": "local-llm",
+        "endpoint": "http://localhost:8000/v1",
+        "model": "Qwen3-Coder-30B-A3B",
         "temperature": 0.7,
         "max_tokens": 1000
     },
     "audio": {
-        "engine": "default-audio-engine",
+        "tts_backend": "kokoro-onnx",
         "format": "wav",
         "sample_rate": 44100,
         "bitrate": "128k"
     },
     "storage": {
         "type": "local",
+        "processed": "data/processed",
+        "output": "data/output",
+        "timeline": "data/processed/timeline.json",
         "mount_point": "/mnt/shared_storage",
         "sync_enabled": true
     }
