@@ -33,13 +33,16 @@ class AssetPackager:
         self,
         timeline_data: Dict[str, Any],
         audio_manifest: Optional[Dict[str, Any]] = None,
+        video_manifest: Optional[Dict[str, Any]] = None,
+        master_animation_path: Optional[str] = None,
         extra_files: Optional[List[str]] = None,
         package_name: str = PACKAGE_NAME,
     ) -> Dict[str, Any]:
-        """Write timeline + manifest into a staging dir and zip them together."""
+        """Write timeline + manifest + audio + video into staging dir and zip them."""
         staging_dir = os.path.join(self.output_dir, "staging")
         audio_dir = os.path.join(staging_dir, "audio")
-        for dir_path in (staging_dir, audio_dir):
+        video_dir = os.path.join(staging_dir, "video")
+        for dir_path in (staging_dir, audio_dir, video_dir):
             os.makedirs(dir_path, exist_ok=True)
 
         timeline_path = os.path.join(staging_dir, TIMELINE_NAME)
@@ -52,6 +55,26 @@ class AssetPackager:
             shutil.copy2(source, target)
             staged_audio.append(os.path.join("audio", os.path.basename(source)))
 
+        staged_video: List[str] = []
+        if video_manifest:
+            for shot in video_manifest.get("shots", []):
+                vid_path = shot.get("synced_video_path") or shot.get("video_path")
+                if vid_path and os.path.isfile(vid_path):
+                    target = os.path.join(video_dir, os.path.basename(vid_path))
+                    shutil.copy2(vid_path, target)
+                    staged_video.append(os.path.join("video", os.path.basename(vid_path)))
+            master_vid = video_manifest.get("master_video_path")
+            if master_vid and os.path.isfile(master_vid):
+                target = os.path.join(video_dir, os.path.basename(master_vid))
+                shutil.copy2(master_vid, target)
+                staged_video.append(os.path.join("video", os.path.basename(master_vid)))
+
+        staged_master: List[str] = []
+        if master_animation_path and os.path.isfile(master_animation_path):
+            target = os.path.join(staging_dir, os.path.basename(master_animation_path))
+            shutil.copy2(master_animation_path, target)
+            staged_master.append(os.path.basename(master_animation_path))
+
         manifest = {
             "package_format": "cartoon-animator-v1",
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -60,7 +83,8 @@ class AssetPackager:
             "total_duration": timeline_data.get("total_duration")
             or timeline_data.get("timeline_metadata", {}).get("total_duration"),
             "audio_backend": (audio_manifest or {}).get("backend"),
-            "files": [TIMELINE_NAME, MANIFEST_NAME, *staged_audio],
+            "video_backend": (video_manifest or {}).get("backend"),
+            "files": [TIMELINE_NAME, MANIFEST_NAME, *staged_master, *staged_audio, *staged_video],
         }
         manifest_path = os.path.join(staging_dir, MANIFEST_NAME)
         with open(manifest_path, "w", encoding="utf-8") as handle:

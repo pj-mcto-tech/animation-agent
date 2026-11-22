@@ -106,9 +106,11 @@ class AudioGenerator:
         for index, entry in enumerate(timeline.entries, start=1):
             shot_id = f"shot_{index:03d}"
             audio_path = os.path.join(output_dir, f"{shot_id}.wav")
-            if backend is not None:
+            audio_needed = getattr(entry, "audio_required", True)
+            spoken_text = getattr(entry, "dialogue", None) or entry.description
+            if backend is not None and audio_needed:
                 backend.generate_voiceover(
-                    text=entry.description,
+                    text=spoken_text,
                     output_path=audio_path,
                     voice=self.voice,
                     speed=self.speed,
@@ -122,7 +124,8 @@ class AudioGenerator:
                     "shot_id": shot_id,
                     "timestamp": entry.timestamp,
                     "type": entry.type,
-                    "text": entry.description,
+                    "text": spoken_text,
+                    "visual_prompt": getattr(entry, "visual_prompt", None) or entry.description,
                     "planned_duration": entry.duration,
                     "audio_path": audio_path,
                     "audio_duration": measure_duration(audio_path),

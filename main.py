@@ -35,6 +35,8 @@ def main() -> int:
     logger.info("Pipeline completed successfully.")
     logger.info("Shots generated: %d", timeline["timeline_metadata"]["total_shots"])
     logger.info("Total duration: %.2fs", timeline["timeline_metadata"]["total_duration"])
+    if result.get("master_animation_path"):
+        logger.info("Master animation video: %s", result["master_animation_path"])
     logger.info("Cartoon Animator package: %s", package["package_path"])
     return 0
 

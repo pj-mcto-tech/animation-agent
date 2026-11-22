@@ -17,11 +17,14 @@ from typing import Any, Dict, List, Optional
 
 from src.asset_packager.packager import AssetPackager
 from src.audio_generator.generator import AudioGenerator
+from src.core.media_utils import mux_audio_and_video
+from src.lipsync.client import LipSyncClient
 from src.timeline_generator.timeline_generator import (
     AnimationTimeline,
     TimelineEntry,
     TimelineGenerator,
 )
+from src.video_generator.generator import VideoGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +34,28 @@ DEFAULT_CONFIG_PATH = os.path.normpath(
 
 
 class AnimationPipeline:
-    """Runs the full script -> timeline -> audio -> package animation pipeline."""
+    """Runs the full script -> timeline -> audio -> video -> lipsync -> package animation pipeline."""
 
     def __init__(
         self,
         config_path: Optional[str] = None,
         timeline_generator: Optional[TimelineGenerator] = None,
         audio_generator: Optional[AudioGenerator] = None,
+        video_generator: Optional[VideoGenerator] = None,
+        lipsync_client: Optional[LipSyncClient] = None,
     ):
         self.config = self._load_config(config_path)
         self.current_stage = "idle"
         self._timeline_generator = timeline_generator
         self._audio_generator = audio_generator
+        self._video_generator = video_generator
+        self._lipsync_client = lipsync_client
         logger.info(
-            "AnimationPipeline initialized (llm_endpoint=%s, llm_model=%s)",
-            self.config["llm_endpoint"],
+            "AnimationPipeline initialized (llm=%s, audio=%s, video=%s on %s)",
             self.config["llm_model"],
+            self.config["tts_backend"],
+            self.config["video_backend"],
+            self.config["video_device"],
         )
 
     @staticmethod
@@ -66,6 +75,8 @@ class AnimationPipeline:
         pipeline = raw.get("pipeline", {})
         llm = raw.get("llm", {})
         audio = raw.get("audio", {})
+        video = raw.get("video", {})
+        lipsync = raw.get("lipsync", {})
         storage = raw.get("storage", {})
         processed_dir = storage.get("processed", "./data/processed")
         config: Dict[str, Any] = {
@@ -78,9 +89,21 @@ class AnimationPipeline:
             # Normalize friendly names ("kokoro-onnx" -> "kokoro").
             "tts_backend": audio.get("tts_backend", "kokoro").replace("-onnx", ""),
             "voice": os.getenv("TTS_VOICE", audio.get("voice", "af_heart")),
+            # Video generation settings (focus on NVIDIA RTX CUDA)
+            "video_backend": os.getenv("VIDEO_BACKEND", video.get("backend", "synthetic")),
+            "video_device": os.getenv("VIDEO_DEVICE", video.get("device", "cuda")),
+            "video_fps": int(video.get("fps", 24)),
+            "video_width": int(video.get("width", 832)),
+            "video_height": int(video.get("height", 480)),
+            # Lip-sync worker settings
+            "lipsync_enabled": lipsync.get("enabled", True),
+            "lipsync_endpoint": os.getenv("LIPSYNC_WORKER_URL", lipsync.get("endpoint", "http://localhost:8001")),
+            "lipsync_engine": lipsync.get("engine", "latentsync"),
+            # Storage
             "output_dir": storage.get("output", "./data/output"),
             "processed_dir": processed_dir,
             "audio_dir": os.path.join(processed_dir, "audio"),
+            "video_dir": os.path.join(processed_dir, "video"),
             "timeline_output": storage.get("timeline", "./data/processed/timeline.json"),
             "shared_storage_dir": storage.get("mount_point")
             if storage.get("sync_enabled")
@@ -111,9 +134,29 @@ class AnimationPipeline:
         audio_manifest = self._coordinate_audio(timeline_data)
         results["audio_manifest"] = audio_manifest
 
+        self.current_stage = "video_generation"
+        logger.info("Stage 4: Generating video clips via %s on %s", self.config["video_backend"], self.config["video_device"])
+        video_manifest = self._generate_video(timeline_data)
+        results["video_manifest"] = video_manifest
+
+        self.current_stage = "lipsync_stage"
+        logger.info("Stage 5: Coordinating lip-sync on dialogue shots")
+        lipsync_manifest = self._process_lipsync(video_manifest, audio_manifest)
+        results["lipsync_manifest"] = lipsync_manifest
+
+        self.current_stage = "master_mux"
+        logger.info("Stage 6: Assembling and muxing final master animation")
+        master_animation = self._mux_master_animation(lipsync_manifest or video_manifest, audio_manifest)
+        results["master_animation_path"] = master_animation
+
         self.current_stage = "asset_packaging"
-        logger.info("Stage 4: Packaging assets for Cartoon Animator")
-        package_info = self._package_assets(timeline_data, audio_manifest)
+        logger.info("Stage 7: Packaging assets for Cartoon Animator")
+        package_info = self._package_assets(
+            timeline_data,
+            audio_manifest=audio_manifest,
+            video_manifest=lipsync_manifest or video_manifest,
+            master_animation_path=master_animation,
+        )
         results["package"] = package_info
 
         self.current_stage = "completed"
@@ -212,13 +255,114 @@ class AnimationPipeline:
         return manifest
 
     # ------------------------------------------------------------------ #
-    # Stage 4: Asset Packaging
+    # Stage 4: Video Generation
+    # ------------------------------------------------------------------ #
+
+    def _generate_video(self, timeline_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate video clips for each timeline shot and concatenate into master_video.mp4."""
+        timeline = AnimationTimeline(
+            entries=[TimelineEntry(**shot) for shot in timeline_data["shots"]],
+            total_duration=timeline_data["timeline_metadata"]["total_duration"],
+        )
+
+        generator = self._video_generator or VideoGenerator(
+            backend=self.config["video_backend"],
+            device=self.config["video_device"],
+            fps=self.config["video_fps"],
+            width=self.config["video_width"],
+            height=self.config["video_height"],
+        )
+
+        manifest = generator.generate_for_timeline(
+            timeline=timeline,
+            output_dir=self.config["video_dir"],
+        )
+
+        manifest_path = os.path.join(self.config["processed_dir"], "video_manifest.json")
+        self._write_json(manifest_path, manifest)
+        manifest["manifest_path"] = manifest_path
+        logger.info("Video manifest written to %s", manifest_path)
+        return manifest
+
+    # ------------------------------------------------------------------ #
+    # Stage 5: Lip-Sync Processing
+    # ------------------------------------------------------------------ #
+
+    def _process_lipsync(
+        self, video_manifest: Dict[str, Any], audio_manifest: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Apply lip-sync via local worker on character dialogue shots."""
+        client = self._lipsync_client or LipSyncClient(
+            endpoint=self.config["lipsync_endpoint"],
+            enabled=self.config["lipsync_enabled"],
+            engine=self.config["lipsync_engine"],
+        )
+
+        synced_dir = os.path.join(self.config["processed_dir"], "lipsync")
+        manifest = client.process_timeline(
+            video_manifest=video_manifest,
+            audio_manifest=audio_manifest,
+            output_dir=synced_dir,
+        )
+
+        manifest_path = os.path.join(self.config["processed_dir"], "lipsync_manifest.json")
+        self._write_json(manifest_path, manifest)
+        manifest["manifest_path"] = manifest_path
+        logger.info("Lip-sync manifest written to %s", manifest_path)
+        return manifest
+
+    # ------------------------------------------------------------------ #
+    # Stage 6: Master Mux
+    # ------------------------------------------------------------------ #
+
+    def _mux_master_animation(
+        self, video_manifest: Dict[str, Any], audio_manifest: Dict[str, Any]
+    ) -> Optional[str]:
+        """Mux assembled video with audio track to produce final master animation MP4."""
+        master_video = video_manifest.get("master_video_path")
+        if not master_video or not os.path.isfile(master_video):
+            logger.warning("No master video found for muxing; skipping.")
+            return None
+
+        # Preferred audio track: background score or first available voiceover
+        audio_path = audio_manifest.get("music", {}).get("audio_path")
+        if not audio_path or not os.path.isfile(audio_path):
+            shots = audio_manifest.get("shots", [])
+            for shot in shots:
+                candidate = shot.get("audio_path")
+                if candidate and os.path.isfile(candidate):
+                    audio_path = candidate
+                    break
+
+        if not audio_path or not os.path.isfile(audio_path):
+            logger.warning("No valid audio track found for master mux; using raw video.")
+            return master_video
+
+        master_out = os.path.join(self.config["output_dir"], "final_master_animation.mp4")
+        try:
+            mux_audio_and_video(
+                video_path=master_video,
+                audio_path=audio_path,
+                output_path=master_out,
+                video_codec="libx264",
+            )
+            return master_out
+        except Exception as exc:
+            logger.warning("Master muxing failed (%s); returning master video path.", exc)
+            return master_video
+
+    # ------------------------------------------------------------------ #
+    # Stage 7: Asset Packaging
     # ------------------------------------------------------------------ #
 
     def _package_assets(
-        self, timeline_data: Dict[str, Any], audio_manifest: Dict[str, Any]
+        self,
+        timeline_data: Dict[str, Any],
+        audio_manifest: Optional[Dict[str, Any]] = None,
+        video_manifest: Optional[Dict[str, Any]] = None,
+        master_animation_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Build the Cartoon Animator ZIP via AssetPackager (timeline + audio + manifest)."""
+        """Build Cartoon Animator ZIP (timeline + audio + video + manifest + final master)."""
         timeline_data = {
             **timeline_data,
             "timeline_metadata": {
@@ -232,9 +376,17 @@ class AnimationPipeline:
             shared_storage_dir=self.config.get("shared_storage_dir"),
         )
         package_info = packager.build_package(
-            timeline_data=timeline_data, audio_manifest=audio_manifest
+            timeline_data=timeline_data,
+            audio_manifest=audio_manifest,
+            video_manifest=video_manifest,
+            master_animation_path=master_animation_path,
         )
-        package_info["audio_manifest_path"] = audio_manifest.get("manifest_path")
+        if audio_manifest:
+            package_info["audio_manifest_path"] = audio_manifest.get("manifest_path")
+        if video_manifest:
+            package_info["video_manifest_path"] = video_manifest.get("manifest_path")
+        if master_animation_path:
+            package_info["master_animation_path"] = master_animation_path
         return package_info
 
     # ------------------------------------------------------------------ #

@@ -18,6 +18,18 @@
         "sample_rate": 44100,
         "bitrate": "128k"
     },
+    "video": {
+        "backend": "synthetic",
+        "device": "cuda",
+        "fps": 24,
+        "width": 832,
+        "height": 480
+    },
+    "lipsync": {
+        "enabled": true,
+        "endpoint": "http://localhost:8001",
+        "engine": "latentsync"
+    },
     "storage": {
         "type": "local",
         "processed": "data/processed",

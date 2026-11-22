@@ -5,7 +5,7 @@ This module integrates with local LLM services to generate structured animation 
 
 import json
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
@@ -19,6 +19,10 @@ class TimelineEntry(BaseModel):
     description: str = Field(..., description="Description of the animation element")
     duration: float = Field(..., description="Duration in seconds")
     type: str = Field(..., description="Type of animation element (character, background, effect)")
+    visual_prompt: Optional[str] = Field(None, description="Detailed visual prompt for video/image generation")
+    dialogue: Optional[str] = Field(None, description="Spoken dialogue or narration for this shot, if any")
+    audio_required: bool = Field(True, description="Whether this shot requires audio generation")
+    camera_movement: Optional[str] = Field(None, description="Camera directive, e.g. static, pan, push")
 
 class AnimationTimeline(BaseModel):
     """Represents a complete animation timeline"""
@@ -109,7 +113,7 @@ class TimelineGenerator:
             "Response format:",
             "{",
             '"entries": [',
-            '{"timestamp": "HH:MM:SS", "description": "element description", "duration": 0.0, "type": "character/background/effect"}',
+            '{"timestamp": "HH:MM:SS", "description": "element description", "duration": 0.0, "type": "character/background/effect", "visual_prompt": "Cinematic visual prompt for video generation", "dialogue": "Spoken line or null", "camera_movement": "static/push/pan"}',
             "],",
             '"total_duration": 0.0',
             "}",
@@ -117,6 +121,7 @@ class TimelineGenerator:
             "- Each entry should have a unique timestamp",
             "- Duration should be realistic (typically 1-5 seconds)",
             "- Element types should be 'character', 'background', or 'effect'",
+            "- Provide a rich visual_prompt suitable for AI video generation",
             "- Total duration should be sum of all entry durations"
         ]
         
