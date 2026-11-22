@@ -1,0 +1,44 @@
+# Environments
+venv/
+.venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.cache/
+
+# Third-party lip-sync clones (managed by their own repos, weights via download scripts)
+lip-sync/LatentSync/
+lip-sync/MuseTalk/
+lip-sync/SadTalker/
+
+# Model weights / binaries
+*.onnx
+*.bin
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+
+# Generated media artifacts
+*.mp4
+*.mp3
+*.wav
+*.flac
+output_*.png
+
+# Pipeline data (keep the tracked sample input only)
+data/processed/
+data/output/
+data/input/*
+!data/input/sample_script.txt
+
+# Secrets
+.env
+
+# OS / editor noise
+.DS_Store
+*.bak
