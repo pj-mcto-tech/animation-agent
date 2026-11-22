@@ -14,6 +14,13 @@ torch>=1.10.0
 # Audio Processing
 pydub>=0.25.0
 soundfile>=0.10.0
+# Stage 3 local voiceover (weights live in audio/, not in git)
+kokoro-onnx>=0.6.0
+# Optional Stage 3 cloud fallback (requires ELEVENLABS_API_KEY)
+elevenlabs>=1.0.0
+
+# Media post-processing (src.core.media_utils ffmpeg muxing)
+imageio-ffmpeg>=0.5.0
 
 # File Handling
 watchdog>=2.1.0

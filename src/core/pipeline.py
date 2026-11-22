@@ -15,8 +15,11 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from src.asset_packager.packager import AssetPackager
+from src.audio_generator.generator import AudioGenerator
 from src.timeline_generator.timeline_generator import (
     AnimationTimeline,
+    TimelineEntry,
     TimelineGenerator,
 )
 
@@ -34,10 +37,12 @@ class AnimationPipeline:
         self,
         config_path: Optional[str] = None,
         timeline_generator: Optional[TimelineGenerator] = None,
+        audio_generator: Optional[AudioGenerator] = None,
     ):
         self.config = self._load_config(config_path)
         self.current_stage = "idle"
         self._timeline_generator = timeline_generator
+        self._audio_generator = audio_generator
         logger.info(
             "AnimationPipeline initialized (llm_endpoint=%s, llm_model=%s)",
             self.config["llm_endpoint"],
@@ -60,7 +65,9 @@ class AnimationPipeline:
 
         pipeline = raw.get("pipeline", {})
         llm = raw.get("llm", {})
+        audio = raw.get("audio", {})
         storage = raw.get("storage", {})
+        processed_dir = storage.get("processed", "./data/processed")
         config: Dict[str, Any] = {
             "project_name": pipeline.get("project_name", "animation-agent"),
             "llm_endpoint": os.getenv(
@@ -68,10 +75,16 @@ class AnimationPipeline:
             ),
             "llm_model": os.getenv("LLM_MODEL", llm.get("model", "Qwen3-Coder-30B-A3B")),
             "llm_temperature": float(llm.get("temperature", 0.7)),
-            "tts_backend": raw.get("audio", {}).get("tts_backend", "kokoro-onnx"),
+            # Normalize friendly names ("kokoro-onnx" -> "kokoro").
+            "tts_backend": audio.get("tts_backend", "kokoro").replace("-onnx", ""),
+            "voice": os.getenv("TTS_VOICE", audio.get("voice", "af_heart")),
             "output_dir": storage.get("output", "./data/output"),
-            "processed_dir": storage.get("processed", "./data/processed"),
+            "processed_dir": processed_dir,
+            "audio_dir": os.path.join(processed_dir, "audio"),
             "timeline_output": storage.get("timeline", "./data/processed/timeline.json"),
+            "shared_storage_dir": storage.get("mount_point")
+            if storage.get("sync_enabled")
+            else None,
         }
         return config
 
@@ -177,26 +190,21 @@ class AnimationPipeline:
     # ------------------------------------------------------------------ #
 
     def _coordinate_audio(self, timeline_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Derive an audio manifest from timeline shots (real TTS synthesis in Phase 2)."""
-        shots = timeline_data["shots"]
-        audio_requirements: List[Dict[str, Any]] = []
-        for index, shot in enumerate(shots):
-            audio_requirements.append(
-                {
-                    "shot_id": index,
-                    "type": shot.get("type", "background"),
-                    "duration": shot.get("duration", 0.0),
-                    "requires_voiceover": shot.get("type") == "character",
-                    "requires_sfx": shot.get("type") == "effect",
-                    "tts_backend": self.config["tts_backend"],
-                }
-            )
+        """Generate real voiceover/music/SFX audio files for every timeline shot."""
+        timeline = AnimationTimeline(
+            entries=[TimelineEntry(**shot) for shot in timeline_data["shots"]],
+            total_duration=timeline_data["timeline_metadata"]["total_duration"],
+        )
 
-        manifest = {
-            "total_duration": timeline_data["timeline_metadata"]["total_duration"],
-            "audio_requirements": audio_requirements,
-            "music_track": {"required": True, "style": "background", "backend": self.config["tts_backend"]},
-        }
+        generator = self._audio_generator or AudioGenerator(
+            backend=self.config["tts_backend"], voice=self.config["voice"]
+        )
+        manifest = generator.generate_for_timeline(
+            timeline,
+            output_dir=self.config["audio_dir"],
+            music_prompt=f"background score for {timeline_data['timeline_metadata'].get('project', self.config['project_name'])}",
+        )
+
         manifest_path = os.path.join(self.config["processed_dir"], "audio_manifest.json")
         self._write_json(manifest_path, manifest)
         manifest["manifest_path"] = manifest_path
@@ -210,42 +218,24 @@ class AnimationPipeline:
     def _package_assets(
         self, timeline_data: Dict[str, Any], audio_manifest: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Write the timeline and build a Cartoon Animator-compatible ZIP package."""
-        import zipfile
-
-        output_dir = self.config["output_dir"]
-        os.makedirs(output_dir, exist_ok=True)
-
-        timeline_path = os.path.join(output_dir, "timeline.json")
-        self._write_json(timeline_path, timeline_data)
-
-        manifest = {
-            "project": self.config["project_name"],
-            "version": "1.0",
-            "shot_count": timeline_data["timeline_metadata"]["total_shots"],
-            "total_duration": timeline_data["timeline_metadata"]["total_duration"],
-            "assets": {
-                "timeline": "timeline.json",
-                "audio_manifest": audio_manifest.get("manifest_path"),
+        """Build the Cartoon Animator ZIP via AssetPackager (timeline + audio + manifest)."""
+        timeline_data = {
+            **timeline_data,
+            "timeline_metadata": {
+                **timeline_data["timeline_metadata"],
+                "project": self.config["project_name"],
             },
         }
-        manifest_path = os.path.join(output_dir, "manifest.json")
-        self._write_json(manifest_path, manifest)
 
-        zip_path = os.path.join(output_dir, "cartoon_animator_package.zip")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.write(timeline_path, "timeline.json")
-            archive.write(manifest_path, "manifest.json")
-            if audio_manifest.get("manifest_path") and os.path.exists(audio_manifest["manifest_path"]):
-                archive.write(audio_manifest["manifest_path"], "audio_manifest.json")
-
-        logger.info("Cartoon Animator package written to %s", zip_path)
-        return {
-            "package_path": zip_path,
-            "timeline_path": timeline_path,
-            "manifest_path": manifest_path,
-            "shot_count": timeline_data["timeline_metadata"]["total_shots"],
-        }
+        packager = AssetPackager(
+            output_dir=self.config["output_dir"],
+            shared_storage_dir=self.config.get("shared_storage_dir"),
+        )
+        package_info = packager.build_package(
+            timeline_data=timeline_data, audio_manifest=audio_manifest
+        )
+        package_info["audio_manifest_path"] = audio_manifest.get("manifest_path")
+        return package_info
 
     # ------------------------------------------------------------------ #
     # Helpers

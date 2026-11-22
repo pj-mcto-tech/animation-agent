@@ -1,8 +1,12 @@
-import imageio_ffmpeg
 import os
-import subprocess
+import sys
 import torch
 from dotenv import load_dotenv
+
+# Allow running as a plain script from the orchestrator directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.core.media_utils import mux_audio_and_video  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from elevenlabs.client import ElevenLabs
 from diffusers import WanPipeline
@@ -100,28 +104,6 @@ def generate_wan_video(visual_prompt, audio_duration, fps=24):
     print(f"Synced video rendered successfully and saved to: {output_video_path}\n")
     return output_video_path
 
-def mux_audio_and_video(video_path, audio_path, output_filename="final_master_animation.mp4"):
-    print("--- Step 4: Muxing Audio and Video with FFmpeg ---")
-    
-    # Get the static ffmpeg binary path bundled with imageio-ffmpeg
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    
-    cmd = [
-        ffmpeg_exe, "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        output_filename
-    ]
-    
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"Success! Master animation file created: {output_filename}\n")
-    except subprocess.CalledProcessError as e:
-        print(f"Error muxing media with ffmpeg: {e.stderr.decode()}")
-        raise
 
 def main():
     print("=== Starting Audio-Synced Multi-Stage Animation Pipeline ===")
